@@ -228,8 +228,6 @@ class ESWrapper(nn.Module):
 		self,
 		text,
 		image_size
-		input_res,
-		total_batches,
 		num_cutouts,
 		hidden_size=256,
 		num_film_layers=10,
