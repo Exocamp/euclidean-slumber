@@ -63,7 +63,7 @@ def get_initial_rays_trig(n, num_steps, device, fov, resolution, ray_start, ray_
     # Create full screen NDC (-1 to +1) coords [x, y, 0, 1].
     # Y is flipped to follow image memory layouts.
     x, y = torch.meshgrid(torch.linspace(-1, 1, W, device=device),
-                          torch.linspace(1, -1, H, device=device))
+                          torch.linspace(1, -1, H, device=device), indexing='ij')
     x = x.T.flatten()
     y = y.T.flatten()
     z = -torch.ones_like(x, device=device) / np.tan((2 * math.pi * fov / 360)/2)

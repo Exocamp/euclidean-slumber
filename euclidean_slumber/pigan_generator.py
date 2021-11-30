@@ -13,9 +13,10 @@ from torch.cuda.amp import autocast
 from .volumetric_rendering import *
 
 class ImplicitGenerator3d(nn.Module):
-    def __init__(self, siren, z_dim, **kwargs):
+    def __init__(self, siren, z_dim, clamp_mode='relu', **kwargs):
         super().__init__()
         self.z_dim = z_dim
+        self.clamp_mode = clamp_mode
         #self.siren = siren(output_dim=4, z_dim=self.z_dim, input_dim=3, device=None)
         self.siren = siren
         self.epoch = 0
@@ -27,7 +28,7 @@ class ImplicitGenerator3d(nn.Module):
 
         self.generate_avg_frequencies()
 
-    def forward(self, z, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, hierarchical_sample, sample_dist=None, lock_view_dependence=False, **kwargs):
+    def forward(self, z, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, hierarchical_sample, nerf_noise, sample_dist=None, lock_view_dependence=False, **kwargs):
         """
         Generates images from a noise vector, rendering parameters, and camera distribution.
         Uses the hierarchical sampling scheme described in NeRF.
@@ -57,7 +58,7 @@ class ImplicitGenerator3d(nn.Module):
         if hierarchical_sample:
             with torch.no_grad():
                 transformed_points = transformed_points.reshape(batch_size, img_size * img_size, num_steps, 3)
-                _, _, weights = fancy_integration(coarse_output, z_vals, device=self.device, clamp_mode=kwargs['clamp_mode'], noise_std=kwargs['nerf_noise'])
+                _, _, weights = fancy_integration(coarse_output, z_vals, device=self.device, clamp_mode=self.clamp_mode, noise_std=nerf_noise)
 
                 weights = weights.reshape(batch_size * img_size * img_size, num_steps) + 1e-5
 
@@ -93,7 +94,7 @@ class ImplicitGenerator3d(nn.Module):
 
 
         # Create images with NeRF
-        pixels, depth, weights = fancy_integration(all_outputs, all_z_vals, device=self.device, white_back=kwargs.get('white_back', False), last_back=kwargs.get('last_back', False), clamp_mode=kwargs['clamp_mode'], noise_std=kwargs['nerf_noise'])
+        pixels, depth, weights = fancy_integration(all_outputs, all_z_vals, device=self.device, white_back=kwargs.get('white_back', False), last_back=kwargs.get('last_back', False), clamp_mode=self.clamp_mode, noise_std=nerf_noise)
 
         pixels = pixels.reshape((batch_size, img_size, img_size, 3))
         pixels = pixels.permute(0, 3, 1, 2).contiguous() * 2 - 1
@@ -112,7 +113,7 @@ class ImplicitGenerator3d(nn.Module):
         return self.avg_frequencies, self.avg_phase_shifts
 
 
-    def staged_forward(self, z, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, psi=1, lock_view_dependence=False, max_batch_size=50000, depth_map=False, near_clip=0, far_clip=2, sample_dist=None, hierarchical_sample=False, **kwargs):
+    def staged_forward(self, z, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, nerf_noise, psi=1, lock_view_dependence=False, max_batch_size=50000, depth_map=False, near_clip=0, far_clip=2, sample_dist=None, hierarchical_sample=False, **kwargs):
         """
         Similar to forward but used for inference.
         Calls the model sequencially using max_batch_size to limit memory usage.
@@ -149,7 +150,7 @@ class ImplicitGenerator3d(nn.Module):
                 head = 0
                 while head < transformed_points.shape[1]:
                     tail = head + max_batch_size
-                    coarse_output[b:b+1, head:tail] = self.siren.forward_with_frequencies_phase_shifts(transformed_points[b:b+1, head:tail], truncated_frequencies[b:b+1], truncated_phase_shifts[b:b+1], ray_directions=transformed_ray_directions_expanded[b:b+1, head:tail])
+                    coarse_output[b:b+1, head:tail] = self.siren.forward_with_freqs_phase_shifts(transformed_points[b:b+1, head:tail], truncated_frequencies[b:b+1], truncated_phase_shifts[b:b+1], ray_directions=transformed_ray_directions_expanded[b:b+1, head:tail])
                     head += max_batch_size
 
             coarse_output = coarse_output.reshape(batch_size, img_size * img_size, num_steps, 4)
@@ -158,7 +159,7 @@ class ImplicitGenerator3d(nn.Module):
             if hierarchical_sample:
                 with torch.no_grad():
                     transformed_points = transformed_points.reshape(batch_size, img_size * img_size, num_steps, 3)
-                    _, _, weights = fancy_integration(coarse_output, z_vals, device=self.device, clamp_mode=kwargs['clamp_mode'], noise_std=kwargs['nerf_noise'])
+                    _, _, weights = fancy_integration(coarse_output, z_vals, device=self.device, clamp_mode=self.clamp_mode, noise_std=nerf_noise)
 
                     weights = weights.reshape(batch_size * img_size * img_size, num_steps) + 1e-5
 
@@ -184,7 +185,7 @@ class ImplicitGenerator3d(nn.Module):
                     head = 0
                     while head < fine_points.shape[1]:
                         tail = head + max_batch_size
-                        fine_output[b:b+1, head:tail] = self.siren.forward_with_frequencies_phase_shifts(fine_points[b:b+1, head:tail], truncated_frequencies[b:b+1], truncated_phase_shifts[b:b+1], ray_directions=transformed_ray_directions_expanded[b:b+1, head:tail])
+                        fine_output[b:b+1, head:tail] = self.siren.forward_with_freqs_phase_shifts(fine_points[b:b+1, head:tail], truncated_frequencies[b:b+1], truncated_phase_shifts[b:b+1], ray_directions=transformed_ray_directions_expanded[b:b+1, head:tail])
                         head += max_batch_size
 
                 fine_output = fine_output.reshape(batch_size, img_size * img_size, num_steps, 4)
@@ -199,7 +200,7 @@ class ImplicitGenerator3d(nn.Module):
                 all_z_vals = z_vals
 
 
-            pixels, depth, weights = fancy_integration(all_outputs, all_z_vals, device=self.device, white_back=kwargs.get('white_back', False), clamp_mode = kwargs['clamp_mode'], last_back=kwargs.get('last_back', False), fill_mode=kwargs.get('fill_mode', None), noise_std=kwargs['nerf_noise'])
+            pixels, depth, weights = fancy_integration(all_outputs, all_z_vals, device=self.device, white_back=kwargs.get('white_back', False), clamp_mode = self.clamp_mode, last_back=kwargs.get('last_back', False), fill_mode=kwargs.get('fill_mode', None), noise_std=nerf_noise)
             depth_map = depth.reshape(batch_size, img_size, img_size).contiguous().cpu()
 
 
@@ -232,7 +233,7 @@ class ImplicitGenerator3d(nn.Module):
                 head = 0
                 while head < transformed_points.shape[1]:
                     tail = head + max_batch_size
-                    coarse_output[b:b+1, head:tail] = self.siren.forward_with_frequencies_phase_shifts(transformed_points[b:b+1, head:tail], truncated_frequencies[b:b+1], truncated_phase_shifts[b:b+1], ray_directions=transformed_ray_directions_expanded[b:b+1, head:tail])
+                    coarse_output[b:b+1, head:tail] = self.siren.forward_with_freqs_phase_shifts(transformed_points[b:b+1, head:tail], truncated_frequencies[b:b+1], truncated_phase_shifts[b:b+1], ray_directions=transformed_ray_directions_expanded[b:b+1, head:tail])
                     head += max_batch_size
 
             coarse_output = coarse_output.reshape(batch_size, img_size * img_size, num_steps, 4)
@@ -242,7 +243,7 @@ class ImplicitGenerator3d(nn.Module):
             if hierarchical_sample:
                 with torch.no_grad():
                     transformed_points = transformed_points.reshape(batch_size, img_size * img_size, num_steps, 3)
-                    _, _, weights = fancy_integration(coarse_output, z_vals, device=self.device, clamp_mode=kwargs['clamp_mode'], noise_std=kwargs['nerf_noise'])
+                    _, _, weights = fancy_integration(coarse_output, z_vals, device=self.device, clamp_mode=self.clamp_mode, noise_std=nerf_noise)
 
                     weights = weights.reshape(batch_size * img_size * img_size, num_steps) + 1e-5
                     z_vals = z_vals.reshape(batch_size * img_size * img_size, num_steps) # We squash the dimensions here. This means we importance sample for every batch for every ray
@@ -266,7 +267,7 @@ class ImplicitGenerator3d(nn.Module):
                     head = 0
                     while head < fine_points.shape[1]:
                         tail = head + max_batch_size
-                        fine_output[b:b+1, head:tail] = self.siren.forward_with_frequencies_phase_shifts(fine_points[b:b+1, head:tail], truncated_frequencies[b:b+1], truncated_phase_shifts[b:b+1], ray_directions=transformed_ray_directions_expanded[b:b+1, head:tail])
+                        fine_output[b:b+1, head:tail] = self.siren.forward_with_freqs_phase_shifts(fine_points[b:b+1, head:tail], truncated_frequencies[b:b+1], truncated_phase_shifts[b:b+1], ray_directions=transformed_ray_directions_expanded[b:b+1, head:tail])
                         head += max_batch_size
 
                 fine_output = fine_output.reshape(batch_size, img_size * img_size, num_steps, 4)
@@ -282,7 +283,7 @@ class ImplicitGenerator3d(nn.Module):
                 all_z_vals = z_vals
 
 
-            pixels, depth, weights = fancy_integration(all_outputs, all_z_vals, device=self.device, white_back=kwargs.get('white_back', False), clamp_mode = kwargs['clamp_mode'], last_back=kwargs.get('last_back', False), fill_mode=kwargs.get('fill_mode', None), noise_std=kwargs['nerf_noise'])
+            pixels, depth, weights = fancy_integration(all_outputs, all_z_vals, device=self.device, white_back=kwargs.get('white_back', False), clamp_mode = self.clamp_mode, last_back=kwargs.get('last_back', False), fill_mode=kwargs.get('fill_mode', None), noise_std=nerf_noise)
             depth_map = depth.reshape(batch_size, img_size, img_size).contiguous().cpu()
 
 
@@ -308,12 +309,12 @@ class ImplicitGenerator3d(nn.Module):
             transformed_ray_directions_expanded = torch.zeros_like(transformed_ray_directions_expanded)
             transformed_ray_directions_expanded[..., -1] = -1
             
-        coarse_output = self.siren.forward_with_frequencies_phase_shifts(transformed_points, frequencies, phase_shifts, ray_directions=transformed_ray_directions_expanded).reshape(batch_size, img_size * img_size, num_steps, 4)
+        coarse_output = self.siren.forward_with_freqs_phase_shifts(transformed_points, frequencies, phase_shifts, ray_directions=transformed_ray_directions_expanded).reshape(batch_size, img_size * img_size, num_steps, 4)
         
         if hierarchical_sample:
             with torch.no_grad():
                 transformed_points = transformed_points.reshape(batch_size, img_size * img_size, num_steps, 3)
-                _, _, weights = fancy_integration(coarse_output, z_vals, device=self.device, clamp_mode=kwargs['clamp_mode'], noise_std=kwargs['nerf_noise'])
+                _, _, weights = fancy_integration(coarse_output, z_vals, device=self.device, clamp_mode=self.clamp_mode, noise_std=nerf_noise)
 
                 weights = weights.reshape(batch_size * img_size * img_size, num_steps) + 1e-5
                 #### Start new importance sampling
@@ -334,7 +335,7 @@ class ImplicitGenerator3d(nn.Module):
                     transformed_ray_directions_expanded = torch.zeros_like(transformed_ray_directions_expanded)
                     transformed_ray_directions_expanded[..., -1] = -1
 
-            fine_output = self.siren.forward_with_frequencies_phase_shifts(fine_points, frequencies, phase_shifts, ray_directions=transformed_ray_directions_expanded).reshape(batch_size, img_size * img_size, -1, 4)
+            fine_output = self.siren.forward_with_freqs_phase_shifts(fine_points, frequencies, phase_shifts, ray_directions=transformed_ray_directions_expanded).reshape(batch_size, img_size * img_size, -1, 4)
 
             all_outputs = torch.cat([fine_output, coarse_output], dim = -2)
             all_z_vals = torch.cat([fine_z_vals, z_vals], dim = -2)
@@ -347,7 +348,7 @@ class ImplicitGenerator3d(nn.Module):
             all_z_vals = z_vals
 
 
-        pixels, depth, weights = fancy_integration(all_outputs, all_z_vals, device=self.device, white_back=kwargs.get('white_back', False), last_back=kwargs.get('last_back', False), clamp_mode=kwargs['clamp_mode'], noise_std=kwargs['nerf_noise'])
+        pixels, depth, weights = fancy_integration(all_outputs, all_z_vals, device=self.device, white_back=kwargs.get('white_back', False), last_back=kwargs.get('last_back', False), clamp_mode=self.clamp_mode, noise_std=nerf_noise)
 
         pixels = pixels.reshape((batch_size, img_size, img_size, 3))
         pixels = pixels.permute(0, 3, 1, 2).contiguous() * 2 - 1

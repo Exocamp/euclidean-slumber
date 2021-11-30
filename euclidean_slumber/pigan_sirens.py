@@ -103,8 +103,9 @@ class CustomMappingNetwork(nn.Module):
 
 	def forward(self, z):
 		freq_offsets = self.network(z)
+
 		freqs = freq_offsets[..., :freq_offsets.shape[-1] // 2]
-		phase_shifts = freq_offsets[..., freq_offsets.shape[-1] // 2]
+		phase_shifts = freq_offsets[..., freq_offsets.shape[-1] // 2:]
 
 		return freqs, phase_shifts
 
@@ -126,14 +127,15 @@ class TALLSIREN(nn.Module):
 		#Intermediate layers
 		for _ in range(num_film_layers - 3):
 			self.network.append(FilmLayer(dim_hidden, dim_hidden, is_first = False, w0=w0, activation=layer_activation))
-		self.final_layer = nn.Linear(dim_hidden, dim_out)
+		self.final_layer = nn.Linear(dim_hidden, 1)
 
 		self.color_layer_sine = FilmLayer(dim_hidden + 3, dim_hidden, is_first = False, activation=layer_activation)
-		self.color_layer_linear = FilmLayer(dim_hidden, 3, w0=w0, is_first = False, activation=final_activation)
+		self.color_layer_linear = nn.Sequential(nn.Linear(dim_hidden, 3), final_activation)
 
 		self.mapping_network = CustomMappingNetwork(z_dim=z_dim, map_hidden_dim=dim_hidden, map_output_dim=((len(self.network) + 1) * dim_hidden * 2), num_layers=num_map_layers)
 
 		self.final_layer.apply(frequency_init(25))
+		self.color_layer_linear.apply(frequency_init(25))
 
 	def forward(self, input, z, ray_directions, **kwargs):
 		freqs, phase_shifts = self.mapping_network(z)
@@ -149,10 +151,10 @@ class TALLSIREN(nn.Module):
 			x = layer(x, freqs[..., start:end], phase_shifts[..., start:end])
 
 		sigma = self.final_layer(x)
-		rbg = self.color_layer_sine(torch.cat([ray_directions, x], dim=-1), freqs[..., -self.dim_hidden:], phase_shifts[..., -self.dim_hidden:])
-		rbg = self.color_layer_linear(rbg)
+		rgb = self.color_layer_sine(torch.cat([ray_directions, x], dim=-1), freqs[..., -self.dim_hidden:], phase_shifts[..., -self.dim_hidden:])
+		rgb = self.color_layer_linear(rgb)
 
-		return torch.cat([rbg, sigma], dim=-1)
+		return torch.cat([rgb, sigma], dim=-1)
 
 class SPATIALSIRENBASELINE(nn.Module):
 	"""Description from pi-GAN repo: Same architecture as TALLSIREN but adds a UniformBoxWarp to map input points to -1, 1. Why not use it here?
@@ -201,46 +203,7 @@ class SPATIALSIRENBASELINE(nn.Module):
 			x = layer(x, freqs[..., start:end], phase_shifts[..., start:end])
 
 		sigma = self.final_layer(x)
-		rbg = self.color_layer_sine(torch.cat([ray_directions, x], dim=-1), freqs[..., -self.dim_hidden:], phase_shifts[..., -self.dim_hidden:])
-		rbg = self.color_layer_linear(rbg)
+		rgb = self.color_layer_sine(torch.cat([ray_directions, x], dim=-1), freqs[..., -self.dim_hidden:], phase_shifts[..., -self.dim_hidden:])
+		rgb = self.color_layer_linear(rgb)
 
-		return torch.cat([rbg, sigma], dim=-1)
-
-#near-copy of SirenWrapper, but useful to keep it by itself
-class SirenWrapper(nn.Module):
-    def __init__(self, net, image_width, image_height, latent_dim = None):
-        super().__init__()
-        assert isinstance(net, SirenNetwork), 'SirenWrapper must receive a Siren network'
-
-        self.net = net
-        self.image_width = image_width
-        self.image_height = image_height
-
-        self.modulator = None
-        if exists(latent_dim):
-            self.modulator = Modulator(
-                dim_in = latent_dim,
-                dim_hidden = net.dim_hidden,
-                num_layers = net.num_layers
-            )
-
-        tensors = [torch.linspace(-1, 1, steps = image_width), torch.linspace(-1, 1, steps = image_height)]
-        mgrid = torch.stack(torch.meshgrid(*tensors, indexing='ij'), dim=-1)
-        mgrid = rearrange(mgrid, 'h w c -> (h w) c')
-
-        self.register_buffer('grid', mgrid)
-
-    def forward(self, img = None, *, latent = None):
-        modulate = exists(self.modulator)
-        assert not (modulate ^ exists(latent)), 'latent vector must be only supplied if `latent_dim` was passed in on instantiation'
-
-        mods = self.modulator(latent) if modulate else None
-
-        coords = self.grid.clone().detach().requires_grad_()
-        out = self.net(coords)
-        out = rearrange(out, '(h w) c -> () c h w', h = self.image_height, w = self.image_width)
-
-        if exists(img):
-            return F.mse_loss(img, out)
-
-        return out
+		return torch.cat([rgb, sigma], dim=-1)

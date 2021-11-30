@@ -14,6 +14,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch_optimizer as opt
+import torchvision
 import torchvision.transforms as T
 
 from imageio import imread, mimsave
@@ -33,7 +34,6 @@ from .utils import *
 clip_mean = [0.48145466, 0.4578275, 0.40821073]
 clip_std = [0.26862954, 0.26130258, 0.27577711]
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device {device}")
 
 def interpolate(image, size):
 	return F.interpolate(image, (size, size), mode='bilinear', align_corners=False)
@@ -151,7 +151,8 @@ class EuclideanSlumber(nn.Module):
 				dim_hidden=hidden_size,
 				dim_out=4,
 				z_dim=latent_dim,
-				w0=theta_hidden
+				w0=theta_hidden,
+				final_activation=nn.Sigmoid()
 			)
 		elif siren == "SPATIALSIRENBASELINE":
 			raise NotImplementedError
@@ -175,13 +176,16 @@ class EuclideanSlumber(nn.Module):
 		self.hierarchical_sample = hierarchical_sample
 		self.sample_dist = sample_dist
 		self.lock_view_dependence = lock_view_dependence
+		self.counter = 0 #step counter for nerf noise
 
 	def forward(self, text_embed, return_loss=True, dry_run=False):
+		self.generator.train()
 		#Generate z
 		z = sample_z((1, self.latent_dim), device=device, dist_type=self.z_dist)
+		self.nerf_noise = max(0, 1. - self.counter/5000.)
 		#Generate image from z.
 		#Yes I know this is inefficient. We can make this nicer a little later when I'm less lazy
-		img, _ = self.generator(z, self.image_size, self.fov, self.ray_start, self.ray_end, self.num_steps, self.h_stddev, self.v_stddev, self.h_mean, self.v_mean, self.hierarchical_sample, self.sample_dist, self.lock_view_dependence)
+		img, _ = self.generator(z, self.image_size, self.fov, self.ray_start, self.ray_end, self.num_steps, self.h_stddev, self.v_stddev, self.h_mean, self.v_mean, self.hierarchical_sample, self.nerf_noise, self.sample_dist, self.lock_view_dependence)
 
 		if not return_loss:
 			return img
@@ -198,7 +202,7 @@ class EuclideanSlumber(nn.Module):
 			size = int(min_size_width*torch.zeros(1,).normal_(mean=.8, std=.3).clip(lower_bound, 1.))
 			offsetx = torch.randint(0, width - size + 1, ())
 			offsety = torch.randint(0, height - size + 1, ())
-			image_piece = out[:, :, offsety:offsety + size, offsetx:offsetx + size]
+			image_piece = img[:, :, offsety:offsety + size, offsetx:offsetx + size]
 			#Re-add experimental resampling later
 			image_piece = interpolate(image_piece, self.input_resolution)
 
@@ -208,7 +212,7 @@ class EuclideanSlumber(nn.Module):
 		image_pieces = torch.cat([self.normalize_image(piece) for piece in image_pieces])
 		#calc image embedding
 		with autocast(enabled=False):
-			image_embed = self.perceptor.encode_image(image_pieces)
+			image_embed = self.clip_perceptor.encode_image(image_pieces)
 
 		# calc loss
 		# loss over averaged features of cutouts
@@ -219,8 +223,9 @@ class EuclideanSlumber(nn.Module):
 		loss = averaged_loss * (self.averaging_weight) + general_loss * (1 - self.averaging_weight)
 
 		# count batches
-		if not dry_run:
-			self.num_batches_processed += self.batch_size
+		#if not dry_run:
+			#self.num_batches_processed += self.batch_size
+		self.counter += 1
 
 		return img, loss
 
@@ -265,6 +270,7 @@ class ESWrapper(nn.Module):
 	):
 
 		super().__init__()
+		tqdm.write(f'Using device {device}')
 
 		if exists(seed):
 			tqdm.write(f'Setting seed to {seed}')
@@ -375,22 +381,51 @@ class ESWrapper(nn.Module):
 		self.ema.update(self.model.generator.parameters())
 		self.ema2.update(self.model.generator.parameters())
 
-		if iteration % save_every == 0:
-			self.save_image(epoch, iteration, img=out)
+		if iteration % self.save_every == 0:
+			self.save_image(epoch, iteration)
 
 		return out, total_loss
 
-	@torch.no_grad()
 	def save_image(self, epoch, iteration, img=None):
-		if not exists(img):
-			img = self.model(self.clip_encoding, return_loss=False).cpu().float().clamp(0., 1.)
+		#if not exists(img):
+		#	img = self.model(self.clip_encoding, return_loss=False).cpu().float().clamp(0., 1.)
 		self.filename = self.image_output_path()
 
-		pil_img = T.ToPILImage()(img.squeeze())
-		pil_img.save(self.filename, quality=95, subsampling=0)
-		pil_img.save(f"{self.textpath}.jpg", quality=95, subsampling=0)
+		self.model.generator.eval()
+		with torch.no_grad():
+			with autocast(enabled=True):
+				#fixed: h and v stddev = 0
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, self.image_size, self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence)[0]
+			torchvision.utils.save_image(gen_image, f"{self.textpath}_fixed.jpg", normalize=True)
+			with autocast(enabled=True):
+				#tilted: h and v stddev = 0, h_mean += 0.5
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, self.image_size, self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, (self.model.h_mean + 0.5), self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence)[0]
+			torchvision.utils.save_image(gen_image, f"{self.textpath}_tilted.jpg", normalize=True)
 
-		tqdm.write(f'image updated at "./{str(self.filename)}"')
+		self.ema.store(self.model.generator.parameters())
+		self.ema.copy_to(self.model.generator.parameters())
+		self.model.generator.eval()
+
+		with torch.no_grad():
+			with autocast(enabled=True):
+				#ema fixed
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, self.image_size, self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence)[0]
+			torchvision.utils.save_image(gen_image, f"{self.textpath}_fixed_ema.jpg", normalize=True)
+			with autocast(enabled=True):
+				#ema tilted
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, self.image_size, self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, (self.model.h_mean + 0.5), self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence)[0]
+			torchvision.utils.save_image(gen_image, f"{self.textpath}_tilted_ema.jpg", normalize=True)
+			with autocast(enabled=True):
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, self.image_size, self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, psi=0.7)[0]
+			torchvision.utils.save_image(gen_image, f"{self.textpath}_random.jpg", normalize=True)
+
+		self.ema.restore(self.model.generator.parameters())
+
+		#pil_img = T.ToPILImage()(img.squeeze())
+		#pil_img.save(self.filename, quality=95, subsampling=0)
+		#pil_img.save(f"{self.textpath}.jpg", quality=95, subsampling=0)
+
+		tqdm.write(f'images updated, check file directory')
 
 	def forward(self):
 		tqdm.write(f'Prepare for magic with your prompt "{self.textpath}"')
