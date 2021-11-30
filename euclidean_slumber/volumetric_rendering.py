@@ -30,10 +30,10 @@ def fancy_integration(rgb_sigma, z_vals, device, noise_std=0.5, last_back=False,
 
     if clamp_mode == 'softplus':
         alphas = 1 - torch.exp(-deltas * (F.softplus(sigmas + noise)))
+    elif clamp_mode == 'softmax':
+        alphas = 1 - torch.exp(-deltas * (F.softmax(sigmas + noise)))
     elif clamp_mode == 'relu':
         alphas = 1 - torch.exp(-deltas * (F.relu(sigmas + noise)))
-    elif clamp_mode == 'gelu':
-        alpha = 1 - torch.exp(-deltas * (F.gelu(sigmas + noise)))
     else:
         raise "Need to choose clamp mode"
 
