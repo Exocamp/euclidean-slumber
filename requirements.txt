@@ -1,0 +1,9 @@
+einops>=0.3
+ftfy
+imageio>=2.9.0
+torch>=1.7.1
+torch_optimizer
+torchvision>=0.8.2
+torch-ema @ git+https://github.com/fadel/pytorch_ema@3950a7b5c4b88f46fd14f620277bad21898597a9
+tqdm
+regex
