@@ -1,6 +1,8 @@
 ## Implementing pi-GAN SIRENs based off the offical repo's source code here. I'm just curious. ##
 
 import math
+
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -95,7 +97,7 @@ class CustomMappingNetwork(nn.Module):
 		self.network = nn.Sequential(*blocks)
 		self.network.apply(kaiming_leaky_init)
 		with torch.no_grad():
-			self.network[-1].weight *= 0.25
+			self.network[-1].block.weight *= 0.25
 		#lol. lmao
 		del blocks
 
@@ -118,18 +120,16 @@ class TALLSIREN(nn.Module):
 		self.dim_out = dim_out
 		self.z_dim = z_dim
 		self.network = nn.ModuleList([])
-
-		assert num_layers > 5, 'Not enough layers in TALLSIREN (5 or more needed)'
 		
 		#Layer 1
 		self.network.append(FilmLayer(dim_in, dim_hidden, is_first = True, w0=w0, activation=layer_activation))
 		#Intermediate layers
 		for _ in range(num_film_layers - 3):
-			self.network.append(FilmLayer(dim_hidden, dim_hidden, w0=w0, activation=layer_activation))
+			self.network.append(FilmLayer(dim_hidden, dim_hidden, is_first = False, w0=w0, activation=layer_activation))
 		self.final_layer = nn.Linear(dim_hidden, dim_out)
 
-		self.color_layer_sine = FilmLayer(dim_hidden + 3, dim_hidden, activation=layer_activation)
-		self.color_layer_linear = FilmLayer(dim_hidden, 3, w0=w0, activation=final_activation)
+		self.color_layer_sine = FilmLayer(dim_hidden + 3, dim_hidden, is_first = False, activation=layer_activation)
+		self.color_layer_linear = FilmLayer(dim_hidden, 3, w0=w0, is_first = False, activation=final_activation)
 
 		self.mapping_network = CustomMappingNetwork(z_dim=z_dim, map_hidden_dim=dim_hidden, map_output_dim=((len(self.network) + 1) * dim_hidden * 2), num_layers=num_map_layers)
 

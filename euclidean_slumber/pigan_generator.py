@@ -16,7 +16,8 @@ class ImplicitGenerator3d(nn.Module):
     def __init__(self, siren, z_dim, **kwargs):
         super().__init__()
         self.z_dim = z_dim
-        self.siren = siren(output_dim=4, z_dim=self.z_dim, input_dim=3, device=None)
+        #self.siren = siren(output_dim=4, z_dim=self.z_dim, input_dim=3, device=None)
+        self.siren = siren
         self.epoch = 0
         self.step = 0
 

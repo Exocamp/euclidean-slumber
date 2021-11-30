@@ -33,6 +33,7 @@ from .utils import *
 clip_mean = [0.48145466, 0.4578275, 0.40821073]
 clip_std = [0.26862954, 0.26130258, 0.27577711]
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device {device}")
 
 def interpolate(image, size):
 	return F.interpolate(image, (size, size), mode='bilinear', align_corners=False)
@@ -99,15 +100,15 @@ class EuclideanSlumber(nn.Module):
 		self,
 		clip_perceptor,
 		clip_norm,
-		image_size
+		image_size,
 		input_res,
 		num_cutouts,
 		hidden_size=256,
 		num_film_layers=10,
 		num_map_layers=4,
 		num_steps=12,
-		theta_initial=None,
-		theta_hidden=None,
+		theta_initial=25.,
+		theta_hidden=25.,
 		latent_dim=256,
 		fov=12,
 		ray_start=0.8,
@@ -117,7 +118,8 @@ class EuclideanSlumber(nn.Module):
 		h_stddev=0.5,
 		v_mean=0.5*math.pi,
 		v_stddev=0.4,
-		z_dist='uniform',
+		z_dist='gaussian',
+		sample_dist='uniform',
 		hierarchical_sample=True,
 		lock_view_dependence=False,
 		siren='TALLSIREN',
@@ -134,7 +136,6 @@ class EuclideanSlumber(nn.Module):
 		self.image_size = image_size
 
 		self.num_cutouts = num_cutouts
-		self.total_batches = total_batches
 		self.num_batches_processed = 0
 		self.averaging_weight = averaging_weight
 
@@ -146,9 +147,9 @@ class EuclideanSlumber(nn.Module):
 			siren = TALLSIREN(
 				num_film_layers=num_film_layers,
 				num_map_layers=num_map_layers,
-				dim_in=2,
+				dim_in=3,
 				dim_hidden=hidden_size,
-				dim_out=1,
+				dim_out=4,
 				z_dim=latent_dim,
 				w0=theta_hidden
 			)
@@ -160,7 +161,7 @@ class EuclideanSlumber(nn.Module):
 		#Generate fixed z:
 		self.latent_dim = latent_dim
 		self.z_dist = z_dist
-		self.fixed_z = sample_z((1, latent_dim), device=device)
+		self.fixed_z = sample_z((1, latent_dim), device=device, dist_type=z_dist)
 
 		#Generator hyperparams
 		self.fov = fov
@@ -177,7 +178,7 @@ class EuclideanSlumber(nn.Module):
 
 	def forward(self, text_embed, return_loss=True, dry_run=False):
 		#Generate z
-		z = sample_z((1, latent_dim), device=device, dist_type=z_dist)
+		z = sample_z((1, self.latent_dim), device=device, dist_type=self.z_dist)
 		#Generate image from z.
 		#Yes I know this is inefficient. We can make this nicer a little later when I'm less lazy
 		img, _ = self.generator(z, self.image_size, self.fov, self.ray_start, self.ray_end, self.num_steps, self.h_stddev, self.v_stddev, self.h_mean, self.v_mean, self.hierarchical_sample, self.sample_dist, self.lock_view_dependence)
@@ -227,14 +228,14 @@ class ESWrapper(nn.Module):
 	def __init__(
 		self,
 		text,
-		image_size
+		image_size,
 		num_cutouts,
 		hidden_size=256,
 		num_film_layers=10,
 		num_map_layers=4,
 		num_steps=12,
-		theta_initial=None,
-		theta_hidden=None,
+		theta_initial=25.,
+		theta_hidden=25.,
 		latent_dim=256,
 		fov=12,
 		ray_start=0.8,
@@ -244,7 +245,8 @@ class ESWrapper(nn.Module):
 		h_stddev=0.5,
 		v_mean=0.5*math.pi,
 		v_stddev=0.4,
-		z_dist='uniform',
+		z_dist='gaussian',
+		sample_dist='uniform',
 		hierarchical_sample=True,
 		lock_view_dependence=False,
 		siren='TALLSIREN',
@@ -305,6 +307,7 @@ class ESWrapper(nn.Module):
 			v_mean=v_mean,
 			v_stddev=v_stddev,
 			z_dist=z_dist,
+			sample_dist=sample_dist,
 			hierarchical_sample=hierarchical_sample,
 			lock_view_dependence=lock_view_dependence,
 			siren=siren,
@@ -318,7 +321,7 @@ class ESWrapper(nn.Module):
 		self.scaler = GradScaler()
 		#Modify LRs
 		if not unique_lr:
-			mapping_network_param_names = [name for name, _ in generator.siren.mapping_network.named_parameters()]
+			mapping_network_param_names = [name for name, _ in model.generator.siren.mapping_network.named_parameters()]
 			mapping_network_params = [p for n, p in model.generator.named_parameters() if n in mapping_network_param_names]
 			gen_parameters = [p for n, p in model.generator.named_parameters() if n not in mapping_network_param_names]
 			self.optimizer = optim.Adam([{'params': gen_parameters, 'name': 'generator'},
@@ -336,7 +339,6 @@ class ESWrapper(nn.Module):
 		self.textpath = create_text_path(self.perceptor.context_length, text=text)
 		# create coding to optimize for
 		self.clip_encoding = self.create_clip_encoding(text)
-
 
 	def create_clip_encoding(self, text=None):
 		self.text = text

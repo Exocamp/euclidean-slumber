@@ -7,3 +7,4 @@ torchvision>=0.8.2
 torch-ema @ git+https://github.com/fadel/pytorch_ema@3950a7b5c4b88f46fd14f620277bad21898597a9
 tqdm
 regex
+rotary-embedding-torch
