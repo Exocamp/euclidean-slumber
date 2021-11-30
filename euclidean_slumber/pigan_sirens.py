@@ -163,7 +163,7 @@ class TALLSIREN(nn.Module):
 class SPATIALSIRENBASELINE(nn.Module):
 	"""Description from pi-GAN repo: Same architecture as TALLSIREN but adds a UniformBoxWarp to map input points to -1, 1. Why not use it here?
 	NOTE: num_layers is the TOTAL number of layers within the whole SIREN, including the color layers.
-	TALLSIREN from original repo has 8 B&W layers and 2 color layers making ten in total - not including the layers in the mapping network."""
+	SPATIALSIRENBASELINE from original repo has 8 B&W layers and 2 color layers making ten in total - not including the layers in the mapping network."""
 
 	def __init__(self, num_film_layers=10, num_map_layers=4, dim_in=2, dim_hidden=256, dim_out=1, z_dim=100, w0=25., layer_activation=torch.sin, final_activation=nn.Sigmoid()):
 		super().__init__()
@@ -192,6 +192,7 @@ class SPATIALSIRENBASELINE(nn.Module):
 
 	def forward(self, input, z, ray_directions, **kwargs):
 		freqs, phase_shifts = self.mapping_network(z)
+		#input shape: torch.Size([1, 196608, 3]), z shape: torch.Size([1, 256]), ray_directions shape: torch.Size([1, 196608, 3]), freqs shape: torch.Size([1, 2304]), phase_shifts shape: torch.Size([1, 2304])
 		return self.forward_with_freqs_phase_shifts(input, freqs, phase_shifts, ray_directions, **kwargs)
 
 	def forward_with_freqs_phase_shifts(self, input, freqs, phase_shifts, ray_directions, **kwargs):
@@ -207,5 +208,9 @@ class SPATIALSIRENBASELINE(nn.Module):
 		sigma = self.final_layer(x)
 		rgb = self.color_layer_sine(torch.cat([ray_directions, x], dim=-1), freqs[..., -self.dim_hidden:], phase_shifts[..., -self.dim_hidden:])
 		rgb = torch.sigmoid(self.color_layer_linear(rgb))
+		#print(f"rgb shape: {rgb.shape}, sigma shape: {sigma.shape}")
+		#rgb shape: torch.Size([1, 46608, 3]), sigma shape: torch.Size([1, 46608, 1])
+		#rgb shape: torch.Size([1, 50000, 3]), sigma shape: torch.Size([1, 50000, 1])
+		#rgb shape: torch.Size([1, 196608, 3]), sigma shape: torch.Size([1, 196608, 1])
 
 		return torch.cat([rgb, sigma], dim=-1)

@@ -123,6 +123,7 @@ class EuclideanSlumber(nn.Module):
 		hierarchical_sample=True,
 		lock_view_dependence=False,
 		siren='TALLSIREN',
+		clamp_mode='softplus',
 		averaging_weight=0.3
 	):
 
@@ -166,7 +167,7 @@ class EuclideanSlumber(nn.Module):
 				final_activation=nn.Sigmoid()
 			)
 
-		self.generator = ImplicitGenerator3d(siren=siren, z_dim=latent_dim)
+		self.generator = ImplicitGenerator3d(siren=siren, z_dim=latent_dim, clamp_mode=clamp_mode)
 
 		#Generate fixed z:
 		self.latent_dim = latent_dim
@@ -259,11 +260,12 @@ class ESWrapper(nn.Module):
 		h_stddev=0.5,
 		v_mean=0.5*math.pi,
 		v_stddev=0.4,
-		z_dist='gaussian',
+		z_dist='uniform',
 		sample_dist='uniform',
 		hierarchical_sample=True,
 		lock_view_dependence=False,
 		siren='TALLSIREN',
+		clamp_mode='softplus',
 		averaging_weight=0.3,
 		epochs=20,
 		iterations=1050,
@@ -326,6 +328,7 @@ class ESWrapper(nn.Module):
 			hierarchical_sample=hierarchical_sample,
 			lock_view_dependence=lock_view_dependence,
 			siren=siren,
+			clamp_mode=clamp_mode,
 			averaging_weight=averaging_weight
 		).to(device)
 
@@ -429,6 +432,7 @@ class ESWrapper(nn.Module):
 			torchvision.utils.save_image(gen_image, f"{self.textpath}_random.jpg", normalize=True)
 
 		self.ema.restore(self.model.generator.parameters())
+		self.model.generator.train()
 
 		#pil_img = T.ToPILImage()(img.squeeze())
 		#pil_img.save(self.filename, quality=95, subsampling=0)

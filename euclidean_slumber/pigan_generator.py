@@ -13,7 +13,7 @@ from torch.cuda.amp import autocast
 from .volumetric_rendering import *
 
 class ImplicitGenerator3d(nn.Module):
-    def __init__(self, siren, z_dim, clamp_mode='relu', **kwargs):
+    def __init__(self, siren, z_dim, clamp_mode='softplus', **kwargs):
         super().__init__()
         self.z_dim = z_dim
         self.clamp_mode = clamp_mode
