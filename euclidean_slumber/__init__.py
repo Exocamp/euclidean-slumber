@@ -1,1 +1,1 @@
-from euclidean_slumber.euclidean_slumber import DeepDaze, Imagine
+from euclidean_slumber.euclidean_slumber import EuclideanSlumber, ESWrapper
