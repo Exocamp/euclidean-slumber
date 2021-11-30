@@ -155,7 +155,16 @@ class EuclideanSlumber(nn.Module):
 				final_activation=nn.Sigmoid()
 			)
 		elif siren == "SPATIALSIRENBASELINE":
-			raise NotImplementedError
+			siren = SPATIALSIRENBASELINE(
+				num_film_layers=num_film_layers,
+				num_map_layers=num_map_layers,
+				dim_in=3,
+				dim_hidden=hidden_size,
+				dim_out=4,
+				z_dim=latent_dim,
+				w0=theta_hidden,
+				final_activation=nn.Sigmoid()
+			)
 
 		self.generator = ImplicitGenerator3d(siren=siren, z_dim=latent_dim)
 

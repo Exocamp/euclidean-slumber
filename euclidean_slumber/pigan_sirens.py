@@ -35,8 +35,12 @@ class LayerActivation(nn.Module):
         return self.activation(self.w0 * x)
 
 class UniformBoxWarp(nn.Module):
-	def forward(self, coords, side_length):
-		return coords * (2 / side_length)
+	def __init__(self, sidelength):
+		super().__init__()
+		self.scale_fac = 2 / sidelength
+
+	def forward(self, coords):
+		return coords * self.scale_fac
 
 class FilmLayer(nn.Module):
 	def __init__(self, dim_in, dim_out, is_first = False, use_bias=True, c = 6., w0 = 1., activation=torch.sin):
@@ -161,27 +165,25 @@ class SPATIALSIRENBASELINE(nn.Module):
 	NOTE: num_layers is the TOTAL number of layers within the whole SIREN, including the color layers.
 	TALLSIREN from original repo has 8 B&W layers and 2 color layers making ten in total - not including the layers in the mapping network."""
 
-	def __init__(self, num_layers, dim_in=3, dim_hidden=256, dim_out=1, z_dim=100, w0=25., layer_activation=torch.sin, final_activation=nn.Sigmoid()):
+	def __init__(self, num_film_layers=10, num_map_layers=4, dim_in=2, dim_hidden=256, dim_out=1, z_dim=100, w0=25., layer_activation=torch.sin, final_activation=nn.Sigmoid()):
 		super().__init__()
 		self.dim_in = dim_in
 		self.dim_hidden = dim_hidden
 		self.dim_out = dim_out
 		self.z_dim = z_dim
 		self.network = nn.ModuleList([])
-
-		assert num_layers > 5, 'Not enough layers in TALLSIREN (5 or more needed)'
 		
 		#Layer 1
 		self.network.append(FilmLayer(3, dim_hidden, is_first = True, w0=w0, activation=layer_activation))
 		#Intermediate layers
-		for _ in range(num_layers - 3):
-			self.network.append(FilmLayer(dim_hidden, dim_hidden, w0=w0, activation=layer_activation))
-		self.final_layer = nn.Linear(dim_hidden, dim_out)
+		for _ in range(num_film_layers - 3):
+			self.network.append(FilmLayer(dim_hidden, dim_hidden, is_first = False, w0=w0, activation=layer_activation))
+		self.final_layer = nn.Linear(dim_hidden, 1)
 
-		self.color_layer_sine = FilmLayer(dim_hidden + 3, dim_hidden, activation=layer_activation)
-		self.color_layer_linear = nn.Linear(dim_hidden, 3)
+		self.color_layer_sine = FilmLayer(dim_hidden + 3, dim_hidden, is_first = False, activation=layer_activation)
+		self.color_layer_linear = nn.Sequential(nn.Linear(dim_hidden, 3))
 
-		self.mapping_network = CustomMappingNetwork(z_dim=z_dim, map_hidden_dim=dim_hidden, map_output_dim=((len(self.network) + 1) * dim_hidden * 2))
+		self.mapping_network = CustomMappingNetwork(z_dim=z_dim, map_hidden_dim=dim_hidden, map_output_dim=((len(self.network) + 1) * dim_hidden * 2), num_layers=num_map_layers)
 
 		self.final_layer.apply(frequency_init(25))
 		self.color_layer_linear.apply(frequency_init(25))
@@ -204,6 +206,6 @@ class SPATIALSIRENBASELINE(nn.Module):
 
 		sigma = self.final_layer(x)
 		rgb = self.color_layer_sine(torch.cat([ray_directions, x], dim=-1), freqs[..., -self.dim_hidden:], phase_shifts[..., -self.dim_hidden:])
-		rgb = self.color_layer_linear(rgb)
+		rgb = torch.sigmoid(self.color_layer_linear(rgb))
 
 		return torch.cat([rgb, sigma], dim=-1)
