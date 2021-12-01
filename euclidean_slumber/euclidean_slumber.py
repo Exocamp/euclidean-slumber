@@ -124,6 +124,7 @@ class EuclideanSlumber(nn.Module):
 		lock_view_dependence=False,
 		siren='TALLSIREN',
 		clamp_mode='softplus',
+		last_back=False,
 		averaging_weight=0.3
 	):
 
@@ -167,7 +168,12 @@ class EuclideanSlumber(nn.Module):
 				final_activation=nn.Sigmoid()
 			)
 
-		self.generator = ImplicitGenerator3d(siren=siren, z_dim=latent_dim, clamp_mode=clamp_mode)
+		self.generator = ImplicitGenerator3d(
+			siren=siren,
+			z_dim=latent_dim,
+			clamp_mode=clamp_mode,
+			last_back=last_back
+		)
 
 		#Generate fixed z:
 		self.latent_dim = latent_dim
@@ -188,6 +194,11 @@ class EuclideanSlumber(nn.Module):
 		self.lock_view_dependence = lock_view_dependence
 		self.counter = 0 #step counter for nerf noise
 
+	def sdl(self, x, y):
+		x = F.normalize(x, dim=-1)
+		y = F.normalize(y, dim=-1)
+		return (x - y).norm(dim=-1).div(2).arcsin().pow(2).mul(2)
+
 	def forward(self, text_embed, return_loss=True, dry_run=False):
 		self.generator.train()
 		#Generate z
@@ -195,9 +206,24 @@ class EuclideanSlumber(nn.Module):
 		self.nerf_noise = max(0, 1. - self.counter/5000.)
 		#Generate image from z.
 		#Yes I know this is inefficient. We can make this nicer a little later when I'm less lazy
-		img, _ = self.generator(z, self.image_size, self.fov, self.ray_start, self.ray_end, self.num_steps, self.h_stddev, self.v_stddev, self.h_mean, self.v_mean, self.hierarchical_sample, self.nerf_noise, self.sample_dist, self.lock_view_dependence)
+		img, _ = self.generator(
+			z=z,
+			img_size=self.image_size,
+			fov=self.fov,
+			ray_start=self.ray_start,
+			ray_end=self.ray_end,
+			num_steps=self.num_steps,
+			h_stddev=self.h_stddev,
+			v_stddev=self.v_stddev,
+			h_mean=self.h_mean,
+			v_mean=self.v_mean,
+			hierarchical_sample=self.hierarchical_sample,
+			nerf_noise=self.nerf_noise,
+			sample_dist=self.sample_dist,
+			lock_view_dependence=self.lock_view_dependence
+		)
 		#normalize image
-		img = ((img + 1) * 0.5).clamp(0.0, 1.0)
+		#img = ((img + 1) * 0.5).clamp(0.0, 1.0)
 
 		if not return_loss:
 			return img
@@ -230,7 +256,9 @@ class EuclideanSlumber(nn.Module):
 		# loss over averaged features of cutouts
 		avg_image_embed = image_embed.mean(dim=0).unsqueeze(0)
 		averaged_loss = -100 * torch.cosine_similarity(text_embed, avg_image_embed, dim=-1).mean()
+		#averaged_loss = self.sdl(avg_image_embed, text_embed).mean()
 		general_loss = -100 * torch.cosine_similarity(text_embed, image_embed, dim=-1).mean()
+		#general_loss = self.sdl(image_embed, text_embed).mean()
 		# merge losses
 		loss = averaged_loss * (self.averaging_weight) + general_loss * (1 - self.averaging_weight)
 
@@ -268,6 +296,8 @@ class ESWrapper(nn.Module):
 		lock_view_dependence=False,
 		siren='TALLSIREN',
 		clamp_mode='softplus',
+		last_back=False,
+		last_back_eval=True,
 		averaging_weight=0.3,
 		epochs=20,
 		iterations=1050,
@@ -331,6 +361,7 @@ class ESWrapper(nn.Module):
 			lock_view_dependence=lock_view_dependence,
 			siren=siren,
 			clamp_mode=clamp_mode,
+			last_back=last_back,
 			averaging_weight=averaging_weight
 		).to(device)
 
@@ -354,6 +385,7 @@ class ESWrapper(nn.Module):
 
 		self.gradient_accum_every = gradient_accum_every
 		self.grad_clip = grad_clip
+		self.last_back_eval = last_back_eval
 		self.save_every = save_every
 		self.text = text
 		self.textpath = create_text_path(self.perceptor.context_length, text=text)
@@ -409,11 +441,11 @@ class ESWrapper(nn.Module):
 		with torch.no_grad():
 			with autocast(enabled=True):
 				#fixed: h and v stddev = 0
-				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence)[0]
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, last_back=self.last_back_eval)[0]
 			torchvision.utils.save_image(gen_image, f"{self.textpath}_fixed.jpg", normalize=True)
 			with autocast(enabled=True):
 				#tilted: h and v stddev = 0, h_mean += 0.5
-				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, (self.model.h_mean + 0.5), self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence)[0]
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, (self.model.h_mean + 0.5), self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, last_back=self.last_back_eval)[0]
 			torchvision.utils.save_image(gen_image, f"{self.textpath}_tilted.jpg", normalize=True)
 
 		self.ema.store(self.model.generator.parameters())
@@ -423,14 +455,14 @@ class ESWrapper(nn.Module):
 		with torch.no_grad():
 			with autocast(enabled=True):
 				#ema fixed
-				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence)[0]
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, last_back=self.last_back_eval)[0]
 			torchvision.utils.save_image(gen_image, f"{self.textpath}_fixed_ema.jpg", normalize=True)
 			with autocast(enabled=True):
 				#ema tilted
-				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, (self.model.h_mean + 0.5), self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence)[0]
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, (self.model.h_mean + 0.5), self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, last_back=self.last_back_eval)[0]
 			torchvision.utils.save_image(gen_image, f"{self.textpath}_tilted_ema.jpg", normalize=True)
 			with autocast(enabled=True):
-				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, psi=0.7)[0]
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, psi=0.7, last_back=self.last_back_eval)[0]
 			torchvision.utils.save_image(gen_image, f"{self.textpath}_random.jpg", normalize=True)
 
 		self.ema.restore(self.model.generator.parameters())

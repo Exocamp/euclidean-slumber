@@ -113,7 +113,7 @@ class ImplicitGenerator3d(nn.Module):
         return self.avg_frequencies, self.avg_phase_shifts
 
 
-    def staged_forward(self, z, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, nerf_noise, psi=1, lock_view_dependence=False, max_batch_size=50000, depth_map=False, near_clip=0, far_clip=2, sample_dist=None, hierarchical_sample=False, **kwargs):
+    def staged_forward(self, z, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, nerf_noise, psi=1, lock_view_dependence=False, max_batch_size=50000, depth_map=False, near_clip=0, far_clip=2, sample_dist=None, hierarchical_sample=False, last_back_eval=False, **kwargs):
         """
         Similar to forward but used for inference.
         Calls the model sequencially using max_batch_size to limit memory usage.
@@ -200,7 +200,7 @@ class ImplicitGenerator3d(nn.Module):
                 all_z_vals = z_vals
 
 
-            pixels, depth, weights = fancy_integration(all_outputs, all_z_vals, device=self.device, white_back=kwargs.get('white_back', False), clamp_mode = self.clamp_mode, last_back=kwargs.get('last_back', False), fill_mode=kwargs.get('fill_mode', None), noise_std=nerf_noise)
+            pixels, depth, weights = fancy_integration(all_outputs, all_z_vals, device=self.device, white_back=kwargs.get('white_back', False), clamp_mode = self.clamp_mode, last_back=last_back_eval, fill_mode=kwargs.get('fill_mode', None), noise_std=nerf_noise)
             depth_map = depth.reshape(batch_size, img_size, img_size).contiguous().cpu()
 
 
