@@ -204,6 +204,7 @@ class EuclideanSlumber(nn.Module):
 		#Generate z
 		z = sample_z((1, self.latent_dim), device=device, dist_type=self.z_dist)
 		self.nerf_noise = max(0, 1. - self.counter/5000.)
+
 		#Generate image from z.
 		#Yes I know this is inefficient. We can make this nicer a little later when I'm less lazy
 		img, _ = self.generator(
@@ -275,6 +276,7 @@ class ESWrapper(nn.Module):
 		text,
 		image_size,
 		num_cutouts,
+		save_dir,
 		hidden_size=256,
 		num_film_layers=10,
 		num_map_layers=4,
@@ -309,6 +311,7 @@ class ESWrapper(nn.Module):
 		grad_clip=0.3,
 		betas=(0, 0.9),
 		save_every=20,
+		model_dir='',
 		seed=0
 	):
 
@@ -325,6 +328,8 @@ class ESWrapper(nn.Module):
 		self.image_size = image_size
 		self.iterations = iterations
 		self.epochs = epochs
+		self.model_dir = model_dir
+		self.save_dir = save_dir
 
 		#Load CLIP
 		clip_perceptor, norm = load(model_name, jit=False, device=device)
@@ -334,52 +339,63 @@ class ESWrapper(nn.Module):
 		input_res = clip_perceptor.visual.input_resolution
 		self.clip_transform = create_clip_img_transform(input_res)
 
-		model = EuclideanSlumber(
-			self.perceptor,
-			norm,
-			image_size,
-			input_res,
-			num_cutouts,
-			hidden_size=hidden_size,
-			num_film_layers=num_film_layers,
-			num_map_layers=num_map_layers,
-			num_steps=num_steps,
-			theta_initial=theta_initial,
-			theta_hidden=theta_hidden,
-			latent_dim=latent_dim,
-			fov=fov,
-			ray_start=ray_start,
-			ray_end=ray_end,
-			fade_steps=fade_steps,
-			h_mean=h_mean,
-			h_stddev=h_stddev,
-			v_mean=v_mean,
-			v_stddev=v_stddev,
-			z_dist=z_dist,
-			sample_dist=sample_dist,
-			hierarchical_sample=hierarchical_sample,
-			lock_view_dependence=lock_view_dependence,
-			siren=siren,
-			clamp_mode=clamp_mode,
-			last_back=last_back,
-			averaging_weight=averaging_weight
-		).to(device)
-
-		self.model = model
-		self.ema = ExponentialMovingAverage(model.generator.parameters(), decay=0.999)
-		self.ema2 = ExponentialMovingAverage(model.generator.parameters(), decay=0.9999)
-
 		self.scaler = GradScaler()
+
+		if self.save_dir != '':
+			self.model = torch.load(os.path.join(self.model_dir, 'generator.pth'), map_location=device)
+			self.ema = torch.load(os.path.join(self.model_dir, 'ema.pth'), map_location=device)
+			self.ema2 = torch.load(os.path.join(self.model_dir, 'ema2.pth'), map_location=device)
+			print("Models loaded")
+		else:
+			model = EuclideanSlumber(
+				self.perceptor,
+				norm,
+				image_size,
+				input_res,
+				num_cutouts,
+				hidden_size=hidden_size,
+				num_film_layers=num_film_layers,
+				num_map_layers=num_map_layers,
+				num_steps=num_steps,
+				theta_initial=theta_initial,
+				theta_hidden=theta_hidden,
+				latent_dim=latent_dim,
+				fov=fov,
+				ray_start=ray_start,
+				ray_end=ray_end,
+				fade_steps=fade_steps,
+				h_mean=h_mean,
+				h_stddev=h_stddev,
+				v_mean=v_mean,
+				v_stddev=v_stddev,
+				z_dist=z_dist,
+				sample_dist=sample_dist,
+				hierarchical_sample=hierarchical_sample,
+				lock_view_dependence=lock_view_dependence,
+				siren=siren,
+				clamp_mode=clamp_mode,
+				last_back=last_back,
+				averaging_weight=averaging_weight
+			).to(device)
+			self.model = model
+			self.ema = ExponentialMovingAverage(model.generator.parameters(), decay=0.999)
+			self.ema2 = ExponentialMovingAverage(model.generator.parameters(), decay=0.9999)
+
 		#Modify LRs
 		if not unique_lr:
-			mapping_network_param_names = [name for name, _ in model.generator.siren.mapping_network.named_parameters()]
-			mapping_network_params = [p for n, p in model.generator.named_parameters() if n in mapping_network_param_names]
-			gen_parameters = [p for n, p in model.generator.named_parameters() if n not in mapping_network_param_names]
+			mapping_network_param_names = [name for name, _ in self.model.generator.siren.mapping_network.named_parameters()]
+			mapping_network_params = [p for n, p in self.model.generator.named_parameters() if n in mapping_network_param_names]
+			gen_parameters = [p for n, p in self.model.generator.named_parameters() if n not in mapping_network_param_names]
 			self.optimizer = optim.Adam([{'params': gen_parameters, 'name': 'generator'},
 				{'params': mapping_network_params, 'name': 'mapping_network', 'lr': gen_lr*5e-2}],
 				lr=gen_lr, betas=betas, weight_decay=weight_decay)
 		else:
-			self.optimizer = optim.Adam(model.generator.parameters(), lr=gen_lr, betas=betas)
+			self.optimizer = optim.Adam(self.model.generator.parameters(), lr=gen_lr, betas=betas)
+
+		if self.model_dir != '':
+			self.optimizer.load_state_dict(torch.load(os.path.join(self.model_dir, 'optimizer.pth')))
+			self.scaler.load_state_dict(torch.load(os.path.join(self.model_dir, 'scaler.pth')))
+			print("Optimizer loaded")
 
 		self.model.generator.set_device(device)
 
@@ -429,6 +445,15 @@ class ESWrapper(nn.Module):
 
 		if iteration % self.save_every == 0:
 			self.save_image(epoch, iteration)
+
+		#Saving models test on every epoch
+		if iteration == 0:
+			torch.save(self.ema, os.path.join(self.save_dir, "ema.pth"))
+			torch.save(self.ema2, os.path.join(self.save_dir, "ema2.pth"))
+			torch.save(self.model, os.path.join(self.save_dir, "generator.pth"))
+			torch.save(self.optimizer.state_dict(), os.path.join(self.save_dir, "optimizer.pth"))
+			torch.save(self.scaler.state_dict(), os.path.join(self.save_dir, "scaler.pth"))
+			print("Models saved.")
 
 		return out, total_loss
 
