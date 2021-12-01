@@ -378,8 +378,8 @@ class ESWrapper(nn.Module):
 				averaging_weight=averaging_weight
 			).to(device)
 			self.model = model
-			self.ema = ExponentialMovingAverage(model.generator.parameters(), decay=0.999)
-			self.ema2 = ExponentialMovingAverage(model.generator.parameters(), decay=0.9999)
+			self.ema = ExponentialMovingAverage(self.model.generator.parameters(), decay=0.999)
+			self.ema2 = ExponentialMovingAverage(self.model.generator.parameters(), decay=0.9999)
 
 		#Modify LRs
 		if not unique_lr:
@@ -425,7 +425,10 @@ class ESWrapper(nn.Module):
 		total_loss = 0
 
 		if self.scaler.get_scale() < 1:
-			self.scaler.update(1.)
+			try:
+				self.scaler.update(1.)
+			except:
+				pass
 
 		for _ in range(self.gradient_accum_every):
 			with autocast(enabled=True):
