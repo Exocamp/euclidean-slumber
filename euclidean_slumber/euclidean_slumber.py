@@ -341,7 +341,7 @@ class ESWrapper(nn.Module):
 
 		self.scaler = GradScaler()
 
-		if self.save_dir != '':
+		if self.model_dir != '':
 			self.model = torch.load(os.path.join(self.model_dir, 'generator.pth'), map_location=device)
 			self.ema = torch.load(os.path.join(self.model_dir, 'ema.pth'), map_location=device)
 			self.ema2 = torch.load(os.path.join(self.model_dir, 'ema2.pth'), map_location=device)
