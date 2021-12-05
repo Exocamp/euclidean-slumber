@@ -28,7 +28,7 @@ def fancy_integration(rgb_sigma, z_vals, device, noise_std=0.5, last_back=False,
 
     noise = torch.randn(sigmas.shape, device=device) * noise_std
 
-    assert clamp_mode in ['softplus', 'softmax', 'relu', 'abs_gelu', 'clamped_gelu'], "Invalid clamp mode"
+    assert clamp_mode in ['softplus', 'softmax', 'relu', 'abs_gelu', 'clamped_gelu', 'softmin'], "Invalid clamp mode"
 
     if clamp_mode == 'softplus':
         alphas = 1 - torch.exp(-deltas * (F.softplus(sigmas + noise)))
@@ -40,6 +40,8 @@ def fancy_integration(rgb_sigma, z_vals, device, noise_std=0.5, last_back=False,
         alphas = 1 - torch.exp(-deltas * (F.gelu(sigmas + noise).abs()))
     elif clamp_mode == 'clamped_gelu':
         alphas = 1 - torch.exp(-deltas * (F.gelu(sigmas + noise).clamp(0.0, 1.0)))
+    elif clamp_mode == 'softmin':
+        alphas = 1 - torch.exp(-deltas * (F.softmin(sigmas + noise)))
 
     alphas_shifted = torch.cat([torch.ones_like(alphas[:, :, :1]), 1-alphas + 1e-10], -2)
     weights = alphas * torch.cumprod(alphas_shifted, -2)[:, :, :-1]

@@ -53,6 +53,8 @@ class ImplicitGenerator3d(nn.Module):
 
         # Model prediction on course points
         coarse_output = self.siren(transformed_points, z, ray_directions=transformed_ray_directions_expanded).reshape(batch_size, img_size * img_size, num_steps, 4)
+        #test normalization here
+        coarse_output = ((coarse_output + 1) * 0.5).clamp(0.0, 1.0)
 
         # Re-sample fine points alont camera rays, as described in NeRF
         if hierarchical_sample:

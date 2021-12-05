@@ -26,6 +26,12 @@ def frequency_init(freq):
                 m.weight.uniform_(-np.sqrt(6 / num_input) / freq, np.sqrt(6 / num_input) / freq)
     return init
 
+def first_layer_film_sine_init(m):
+    with torch.no_grad():
+        if isinstance(m, nn.Linear):
+            num_input = m.weight.size(-1)
+            m.weight.uniform_(-1 / num_input, 1 / num_input) 
+
 class LayerActivation(nn.Module):
     def __init__(self, torch_activation=torch.sin, w0 = 1., learnable=False):
         super().__init__()
@@ -43,34 +49,15 @@ class UniformBoxWarp(nn.Module):
 		return coords * self.scale_fac
 
 class FilmLayer(nn.Module):
-	def __init__(self, dim_in, dim_out, is_first = False, use_bias=True, c = 6., w0 = 1., activation=torch.sin):
+	def __init__(self, dim_in, dim_hidden):
 		super().__init__()
-		self.dim_in = dim_in
-		self.dim_out = dim_out
-		self.is_first = is_first
-		self.use_bias = use_bias
-
-		weight = torch.zeros(dim_out, dim_in)
-		bias = enable(use_bias, torch.zeros(dim_out))
-		self.init_(weight, bias, c = c, w0 = w0)
-
-		self.weight = nn.Parameter(weight)
-		self.bias = enable(use_bias, nn.Parameter(bias))
-		self.activation = activation
-
-	def init_(self, weight, bias, c, w0):
-		w_std = (1 / self.dim_in) if self.is_first else (math.sqrt(c / self.dim_in) / w0)
-		weight.uniform_(-w_std, w_std)
-
-		if exists(bias):
-			bias.uniform_(-w_std, w_std)
+		self.layer = nn.Linear(dim_in, dim_hidden)
 
 	def forward(self, x, freq, phase_shift):
-		x = F.linear(x, self.weight, self.bias)
+		x = self.layer(x)
 		freq = freq.unsqueeze(1).expand_as(x)
 		phase_shift = phase_shift.unsqueeze(1).expand_as(x)
-
-		return self.activation(freq * x + phase_shift)
+		return torch.sin(freq * x + phase_shift)
 
 class CMNBlock(nn.Module):
 	def __init__(self, dim_in, dim_out, do_activation=True, block_activation=nn.LeakyReLU(0.2, inplace=True)):
@@ -127,19 +114,22 @@ class TALLSIREN(nn.Module):
 		self.network = nn.ModuleList([])
 		
 		#Layer 1
-		self.network.append(FilmLayer(dim_in, dim_hidden, is_first = True, w0=w0, activation=layer_activation))
+		self.network.append(FilmLayer(dim_in, dim_hidden))
 		#Intermediate layers
 		for _ in range(num_film_layers - 3):
-			self.network.append(FilmLayer(dim_hidden, dim_hidden, is_first = False, w0=w0, activation=layer_activation))
+			self.network.append(FilmLayer(dim_hidden, dim_hidden))
 		self.final_layer = nn.Linear(dim_hidden, 1)
 
-		self.color_layer_sine = FilmLayer(dim_hidden + 3, dim_hidden, is_first = False, activation=layer_activation)
+		self.color_layer_sine = FilmLayer(dim_hidden + 3, dim_hidden)
 		self.color_layer_linear = nn.Sequential(nn.Linear(dim_hidden, 3), final_activation)
 
 		self.mapping_network = CustomMappingNetwork(z_dim=z_dim, map_hidden_dim=dim_hidden, map_output_dim=((len(self.network) + 1) * dim_hidden * 2), num_layers=num_map_layers)
 
+		self.network.apply(frequency_init(25))
 		self.final_layer.apply(frequency_init(25))
+		self.color_layer_sine.apply(frequency_init(25))
 		self.color_layer_linear.apply(frequency_init(25))
+		self.network[0].apply(first_layer_film_sine_init)
 
 	def forward(self, input, z, ray_directions, **kwargs):
 		freqs, phase_shifts = self.mapping_network(z)
@@ -174,19 +164,22 @@ class SPATIALSIRENBASELINE(nn.Module):
 		self.network = nn.ModuleList([])
 		
 		#Layer 1
-		self.network.append(FilmLayer(3, dim_hidden, is_first = True, w0=w0, activation=layer_activation))
+		self.network.append(FilmLayer(3, dim_hidden))
 		#Intermediate layers
 		for _ in range(num_film_layers - 3):
-			self.network.append(FilmLayer(dim_hidden, dim_hidden, is_first = False, w0=w0, activation=layer_activation))
+			self.network.append(FilmLayer(dim_hidden, dim_hidden))
 		self.final_layer = nn.Linear(dim_hidden, 1)
 
-		self.color_layer_sine = FilmLayer(dim_hidden + 3, dim_hidden, is_first = False, activation=layer_activation)
+		self.color_layer_sine = FilmLayer(dim_hidden + 3, dim_hidden)
 		self.color_layer_linear = nn.Sequential(nn.Linear(dim_hidden, 3))
 
 		self.mapping_network = CustomMappingNetwork(z_dim=z_dim, map_hidden_dim=dim_hidden, map_output_dim=((len(self.network) + 1) * dim_hidden * 2), num_layers=num_map_layers)
 
+		self.network.apply(frequency_init(25))
 		self.final_layer.apply(frequency_init(25))
+		self.color_layer_sine.apply(frequency_init(25))
 		self.color_layer_linear.apply(frequency_init(25))
+		self.network[0].apply(first_layer_film_sine_init)
 
 		self.gridwarper = UniformBoxWarp(0.24)
 

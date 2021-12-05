@@ -199,6 +199,13 @@ class EuclideanSlumber(nn.Module):
 		y = F.normalize(y, dim=-1)
 		return (x - y).norm(dim=-1).div(2).arcsin().pow(2).mul(2)
 
+	def norm_ip(self, img, low, high):
+		#taken from torchvision source code
+		#https://pytorch.org/vision/master/_modules/torchvision/utils.html#save_image
+		img.clamp_(min=low, max=high)
+		img.sub_(low).div(max(high - low, 1e-5))
+		return img
+
 	def forward(self, text_embed, return_loss=True, dry_run=False):
 		self.generator.train()
 		#Generate z
@@ -223,8 +230,9 @@ class EuclideanSlumber(nn.Module):
 			sample_dist=self.sample_dist,
 			lock_view_dependence=self.lock_view_dependence
 		)
-		#normalize image
+		#normalize image according to torchvision method used in save_image
 		#img = ((img + 1) * 0.5).clamp(0.0, 1.0)
+		img = self.norm_ip(img, float(img.min()), float(img.max()))
 
 		if not return_loss:
 			return img
@@ -469,11 +477,11 @@ class ESWrapper(nn.Module):
 		with torch.no_grad():
 			with autocast(enabled=True):
 				#fixed: h and v stddev = 0
-				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, last_back=self.last_back_eval)[0]
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 4), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, last_back=self.last_back_eval)[0]
 			torchvision.utils.save_image(gen_image, f"{self.textpath}_fixed.jpg", normalize=True)
 			with autocast(enabled=True):
 				#tilted: h and v stddev = 0, h_mean += 0.5
-				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, (self.model.h_mean + 0.5), self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, last_back=self.last_back_eval)[0]
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 4), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, (self.model.h_mean + 0.5), self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, last_back=self.last_back_eval)[0]
 			torchvision.utils.save_image(gen_image, f"{self.textpath}_tilted.jpg", normalize=True)
 
 		self.ema.store(self.model.generator.parameters())
@@ -483,14 +491,14 @@ class ESWrapper(nn.Module):
 		with torch.no_grad():
 			with autocast(enabled=True):
 				#ema fixed
-				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, last_back=self.last_back_eval)[0]
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 4), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, last_back=self.last_back_eval)[0]
 			torchvision.utils.save_image(gen_image, f"{self.textpath}_fixed_ema.jpg", normalize=True)
 			with autocast(enabled=True):
 				#ema tilted
-				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, (self.model.h_mean + 0.5), self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, last_back=self.last_back_eval)[0]
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 4), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, (self.model.h_mean + 0.5), self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, last_back=self.last_back_eval)[0]
 			torchvision.utils.save_image(gen_image, f"{self.textpath}_tilted_ema.jpg", normalize=True)
 			with autocast(enabled=True):
-				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 2), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, psi=0.7, last_back=self.last_back_eval)[0]
+				gen_image = self.model.generator.staged_forward(self.model.fixed_z, (self.image_size * 4), self.model.fov, self.model.ray_start, self.model.ray_end, self.model.num_steps, 0, 0, self.model.h_mean, self.model.v_mean, hierarchical_sample=self.model.hierarchical_sample, nerf_noise=self.model.nerf_noise, sample_dist=self.model.sample_dist, lock_view_dependence=self.model.lock_view_dependence, psi=0.7, last_back=self.last_back_eval)[0]
 			torchvision.utils.save_image(gen_image, f"{self.textpath}_random.jpg", normalize=True)
 
 		self.ema.restore(self.model.generator.parameters())
