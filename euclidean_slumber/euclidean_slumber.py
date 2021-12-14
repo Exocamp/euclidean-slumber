@@ -232,7 +232,7 @@ class EuclideanSlumber(nn.Module):
 		)
 		#normalize image according to torchvision method used in save_image
 		#img = ((img + 1) * 0.5).clamp(0.0, 1.0)
-		img = self.norm_ip(img, float(img.min()), float(img.max()))
+		#img = self.norm_ip(img, float(img.min()), float(img.max()))
 
 		if not return_loss:
 			return img

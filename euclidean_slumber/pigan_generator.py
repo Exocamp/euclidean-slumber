@@ -21,6 +21,7 @@ class ImplicitGenerator3d(nn.Module):
         self.siren = siren
         self.epoch = 0
         self.step = 0
+        self.z_to_optimize = nn.Parameter(torch.randn((1, z_dim), device='cuda'))
 
     def set_device(self, device):
         self.device = device
@@ -36,6 +37,7 @@ class ImplicitGenerator3d(nn.Module):
 
         #Batch size is always 1 for CLIP generation (unless you REALLY have the hardware)
         batch_size = z.shape[0]
+        #print(self.z_to_optimize.clone().detach())
 
         # Generate initial camera rays and sample points.
         with torch.no_grad():
@@ -52,9 +54,9 @@ class ImplicitGenerator3d(nn.Module):
                 transformed_ray_directions_expanded[..., -1] = -1
 
         # Model prediction on course points
-        coarse_output = self.siren(transformed_points, z, ray_directions=transformed_ray_directions_expanded).reshape(batch_size, img_size * img_size, num_steps, 4)
+        coarse_output = self.siren(transformed_points, self.z_to_optimize, ray_directions=transformed_ray_directions_expanded).reshape(batch_size, img_size * img_size, num_steps, 4)
         #test normalization here
-        coarse_output = ((coarse_output + 1) * 0.5).clamp(0.0, 1.0)
+        #coarse_output = ((coarse_output + 1) * 0.5).clamp(0.0, 1.0)
 
         # Re-sample fine points alont camera rays, as described in NeRF
         if hierarchical_sample:
@@ -82,7 +84,7 @@ class ImplicitGenerator3d(nn.Module):
                 #### end new importance sampling
 
             # Model prediction on re-sampled find points
-            fine_output = self.siren(fine_points, z, ray_directions=transformed_ray_directions_expanded).reshape(batch_size, img_size * img_size, -1, 4)
+            fine_output = self.siren(fine_points, self.z_to_optimize, ray_directions=transformed_ray_directions_expanded).reshape(batch_size, img_size * img_size, -1, 4)
 
             # Combine course and fine points
             all_outputs = torch.cat([fine_output, coarse_output], dim = -2)
